@@ -20,7 +20,7 @@ describe('WagerTransaction (UT-15…UT-20)', () => {
 
     const refund = makeTransaction({ kind: WagerTransactionKind.Refund });
     expect(refund.requiresReference()).toBe(true);
-    // a rejeição por ausência de referência é **persistida** (plans/08 §4 premissa 2)
+    // a rejeição por ausência de referência é **persistida** com failureCode
     expect(refund.referenceExternalTransactionId).toBeUndefined();
   });
 

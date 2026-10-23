@@ -1,7 +1,7 @@
 # Arquitetura — Distributed Wagering Processor
 
 Documento de decisões: as escolhas **efetivamente implementadas**, os **trade-offs
-medidos** e as **limitações**. Fonte funcional: [`docs/README.md`](docs/README.md).
+medidos** e as **limitações**. Fonte funcional: o enunciado do desafio.
 
 ---
 
@@ -226,7 +226,7 @@ violada → erro ruidoso (`500`/`FAILED`).
 ## 7. API
 
 Contratos, tabela de status e RFC 9457 (`application/problem+json`) conforme o
-desafio (`docs/README.md` §9). Destaques da implementação:
+enunciado do desafio (§9). Destaques da implementação:
 
 | Situação | Status | `code` |
 |---|---|---|

@@ -59,10 +59,9 @@ const defaultCurrencyOf = (config: AppConfig): string =>
   config.env.SUPPORTED_CURRENCIES.split(',')[0]?.trim() ?? 'BRL';
 
 /**
- * Use cases são classes TS puras: registradas por `useFactory` (sem `@Injectable()`,
- * plans/02 §8). Como Bun não emite `design:paramtypes`, os parâmetros das factories
- * são tipados explicitamente — a ordem em `inject` é o único contrato e o
- * compilador a valida.
+ * Use cases são classes TS puras: registradas por `useFactory` (sem `@Injectable()`).
+ * Como Bun não emite `design:paramtypes`, os parâmetros das factories são tipados
+ * explicitamente — a ordem em `inject` é o único contrato e o compilador a valida.
  */
 @Module({})
 export class WageringDomainWiringModule {

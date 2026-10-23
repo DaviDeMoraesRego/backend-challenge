@@ -1,6 +1,6 @@
 /**
  * Barreira de disparo paralelo real: N closures preparam o trabalho, bloqueiam e
- * disparam juntas no mesmo tick (plans/07 §2).
+ * disparam juntas no mesmo tick — sem `sleep` de sincronização.
  */
 export class Barrier {
   private arrived = 0;

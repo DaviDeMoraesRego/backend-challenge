@@ -234,4 +234,3 @@ mocks só em relógio/ids e no JWKS local de unidade. Toda suíte IT/CC/CR termi
 - [`docs/trigger-benchmark.md`](docs/trigger-benchmark.md) — IT-TRIG-01 (overhead medido dos triggers deferidos).
 - [`docs/security-hardening.md`](docs/security-hardening.md) — controles de segurança e contrato de assinatura do envelope.
 - [`postman/README.md`](postman/README.md) — coleção Postman (JSON) + environment para validar o serviço por HTTP/SQS.
-- [`docs/README.md`](docs/README.md) — enunciado do desafio (fonte funcional).

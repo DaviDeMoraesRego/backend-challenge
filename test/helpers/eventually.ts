@@ -1,5 +1,5 @@
 /**
- * Polling com deadline — proibido `sleep` fixo como forma de espera (plans/07 §2).
+ * Polling com deadline — proibido `sleep` fixo como forma de espera em testes.
  */
 export interface EventuallyOptions {
   readonly timeoutMs?: number;
