@@ -1,0 +1,23 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: wagering-api
+    metrics_path: /metrics
+    # Em produção METRICS_AUTH_TOKEN é obrigatório no app; descomente e monte o
+    # arquivo com o mesmo token para o scrape autenticado:
+    # authorization:
+    #   type: Bearer
+    #   credentials_file: /etc/prometheus/metrics_token
+    static_configs:
+      - targets:
+          - api-1:3001
+          - api-2:3002
+          - api-3:3003
+        labels:
+          service: wagering
+
+  - job_name: otel-collector
+    static_configs:
+      - targets: ['otel-collector:8889']

@@ -1,0 +1,223 @@
+name: wagering
+
+x-app-env: &app-env
+  # `development` por padrão. Em produção defina NODE_ENV=production e TODAS as
+  # variáveis de segurança abaixo — o boot falha (fail-fast) se faltar alguma.
+  NODE_ENV: ${NODE_ENV:-development}
+  LOG_LEVEL: info
+  DATABASE_URL: postgres://wagering_app:${APP_DB_PASSWORD:-wagering_app}@postgres:5432/wagering
+  DATABASE_URL_MIGRATOR: postgres://wagering_migrator:${MIGRATOR_DB_PASSWORD:-wagering_migrator}@postgres:5432/wagering
+  PG_POOL_MAX: "48"
+  SQS_ENDPOINT: http://localstack:4566
+  AWS_REGION: us-east-1
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test}
+  SQS_TRANSACTIONS_QUEUE_URL: http://localstack:4566/000000000000/wager-transactions.fifo
+  SQS_TRANSACTIONS_DLQ_URL: http://localstack:4566/000000000000/wager-transactions-dlq.fifo
+  SQS_EVENTS_QUEUE_URL: http://localstack:4566/000000000000/wager-events.fifo
+  SQS_REQUIRE_SIGNATURE: ${SQS_REQUIRE_SIGNATURE:-false}
+  SQS_SIGNING_SECRET: ${SQS_SIGNING_SECRET:-}
+  AUTH_ENABLED: ${AUTH_ENABLED:-true}
+  JWT_ALGORITHMS: ${JWT_ALGORITHMS:-RS256}
+  # tokens são emitidos via http://localhost:8080 → o issuer precisa ser o mesmo para validar `iss`
+  KEYCLOAK_ISSUER: http://localhost:8080/realms/jungle
+  # já o JWKS é buscado pela rede interna do compose
+  KEYCLOAK_JWKS_URL: http://keycloak:8080/realms/jungle/protocol/openid-connect/certs
+  KEYCLOAK_AUDIENCE: wagering-api
+  SUPPORTED_CURRENCIES: BRL,USD
+  PROVIDERS: provider-a,provider-b
+  METRICS_ENABLED: "true"
+  METRICS_AUTH_TOKEN: ${METRICS_AUTH_TOKEN:-}
+  OTEL_ENABLED: "true"
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+  OTEL_SERVICE_NAME: wagering-api
+
+x-app-base: &app-base
+  build:
+    context: .
+    dockerfile: Dockerfile
+  depends_on:
+    postgres:
+      condition: service_healthy
+    localstack:
+      condition: service_started
+    keycloak:
+      condition: service_started
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:16.4-alpine
+    environment:
+      POSTGRES_DB: wagering
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    command:
+      - postgres
+      - -c
+      - max_connections=200
+    ports:
+      # bind local: o Postgres nunca deve ficar exposto na interface pública
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d wagering"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  localstack:
+    image: localstack/localstack:3.8.1
+    environment:
+      SERVICES: sqs
+      DEBUG: "0"
+      AWS_DEFAULT_REGION: us-east-1
+    ports:
+      - "127.0.0.1:4566:4566"
+    volumes:
+      - ./infra/localstack/init.sh:/etc/localstack/init/ready.d/init.sh:ro
+      - localstack:/var/lib/localstack
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:4566/_localstack/health >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0.5
+    command: ["start-dev", "--import-realm", "--http-port=8080"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USERNAME:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KC_HEALTH_ENABLED: "true"
+      # Issuer fixo: tokens emitidos via rede interna (`keycloak:8080`) precisam ter
+      # `iss = http://localhost:8080/realms/jungle`, que é o valor validado pela API.
+      KC_HOSTNAME: ${KEYCLOAK_HOSTNAME:-http://localhost:8080}
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./infra/keycloak:/opt/keycloak/data/import:ro
+    healthcheck:
+      # Keycloak 26 responde 500 a requests sem header `Host` (HTTP/1.0), então o
+      # probe usa HTTP/1.1 explícito no endpoint de management `/health/ready`.
+      test:
+        - CMD-SHELL
+        - >
+          exec 3<>/dev/tcp/127.0.0.1/9000 &&
+          printf 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 &&
+          head -1 <&3 | grep -q '200'
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    profiles: ["tools"]
+    environment:
+      <<: *app-env
+      ROLE: outbox-retention-job
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint:
+      ["bun", "run", "src/contexts/wagering/infrastructure/persistence/cli/migrate.ts", "up"]
+    restart: "no"
+
+  api-1: &api
+    <<: *app-base
+    environment:
+      <<: *app-env
+      ROLE: api,sqs-consumer,outbox-publisher,pending-reference-worker,reconciliation-job,outbox-retention-job
+      PORT: "3001"
+      INSTANCE_ID: api-1
+    ports:
+      - "127.0.0.1:3001:3001"
+
+  api-2:
+    <<: *api
+    environment:
+      <<: *app-env
+      ROLE: api,sqs-consumer,outbox-publisher,pending-reference-worker,reconciliation-job,outbox-retention-job
+      PORT: "3002"
+      INSTANCE_ID: api-2
+    ports:
+      - "127.0.0.1:3002:3002"
+
+  api-3:
+    <<: *api
+    environment:
+      <<: *app-env
+      ROLE: api,sqs-consumer,outbox-publisher,pending-reference-worker,reconciliation-job,outbox-retention-job
+      PORT: "3003"
+      INSTANCE_ID: api-3
+    ports:
+      - "127.0.0.1:3003:3003"
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
+
+  otel-collector:
+    image: otel/opentelemetry-collector:0.111.0
+    command: ["--config=/etc/otel/collector.yml"]
+    volumes:
+      - ./infra/otel/collector.yml:/etc/otel/collector.yml:ro
+    depends_on:
+      - jaeger
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+      - "8889:8889"
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - promdata:/prometheus
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:11.3.1
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/provisioning/dashboards:/var/lib/grafana/dashboards:ro
+      - grafanadata:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - jaeger
+    ports:
+      - "3000:3000"
+
+  k6:
+    image: grafana/k6:0.54.0
+    profiles: ["load"]
+    environment:
+      TARGETS: http://api-1:3001,http://api-2:3002,http://api-3:3003
+      TOKEN_URL: http://keycloak:8080/realms/jungle/protocol/openid-connect/token
+    volumes:
+      - ./test/load:/scripts:ro
+    entrypoint: ["k6", "run", "/scripts/wager-load.js"]
+    depends_on:
+      - api-1
+
+volumes:
+  pgdata:
+  localstack:
+  promdata:
+  grafanadata:
